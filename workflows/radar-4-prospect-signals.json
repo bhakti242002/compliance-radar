@@ -1,0 +1,410 @@
+{
+  "name": "Radar – Prospect signals",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "bf630ffb-3c53-461c-84c3-6c8c67564b08",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "PASTE_YOUR_SHEET_URL",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "prospects",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "7c940bca-adf2-4dce-85fa-f73126f5e0b3",
+      "name": "Read prospects",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.ashbyhq.com/posting-api/job-board/{{ $json.ashby_board }}",
+        "options": {}
+      },
+      "id": "30ff48e8-3ae4-4860-b247-6440694ee896",
+      "name": "Get Ashby jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "PASTE_YOUR_SHEET_URL",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "prospect_log",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "c0a920e0-2ce5-4d46-a6d9-3ddf7a66c0ca",
+      "name": "Read prospect log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        660,
+        0
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "PASTE_YOUR_SHEET_URL",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "rules",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "235e97d0-fc87-415b-a462-4e880f235bf3",
+      "name": "Read rules",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Find new-state hiring from public Ashby job boards. Code node, Mode: Run Once for All Items.\nconst STATES = { alabama:'AL', alaska:'AK', arizona:'AZ', arkansas:'AR', california:'CA', colorado:'CO',\n  connecticut:'CT', delaware:'DE', 'district of columbia':'DC', florida:'FL', georgia:'GA', hawaii:'HI',\n  idaho:'ID', illinois:'IL', indiana:'IN', iowa:'IA', kansas:'KS', kentucky:'KY', louisiana:'LA', maine:'ME',\n  maryland:'MD', massachusetts:'MA', michigan:'MI', minnesota:'MN', mississippi:'MS', missouri:'MO',\n  montana:'MT', nebraska:'NE', nevada:'NV', 'new hampshire':'NH', 'new jersey':'NJ', 'new mexico':'NM',\n  'new york':'NY', 'north carolina':'NC', 'north dakota':'ND', ohio:'OH', oklahoma:'OK', oregon:'OR',\n  pennsylvania:'PA', 'rhode island':'RI', 'south carolina':'SC', 'south dakota':'SD', tennessee:'TN',\n  texas:'TX', utah:'UT', vermont:'VT', virginia:'VA', washington:'WA', 'west virginia':'WV',\n  wisconsin:'WI', wyoming:'WY' };\nconst CODES = new Set(Object.values(STATES));\nconst US = new Set(['', 'us', 'usa', 'united states', 'united states of america']);\n\nfunction stateOf(address, label) {\n  const region = String(address?.addressRegion || '').trim();\n  const country = String(address?.addressCountry || '').trim().toLowerCase();\n  if (region && US.has(country)) {\n    if (CODES.has(region.toUpperCase())) return region.toUpperCase();\n    if (STATES[region.toLowerCase()]) return STATES[region.toLowerCase()];\n  }\n  const m = String(label || '').match(/,\\s*([A-Z]{2})\\b/); // \"Austin, TX\"\n  if (m && CODES.has(m[1])) return m[1];\n  return null; // remote, non-US, or unparseable\n}\n\nconst prospects = $('Read prospects').all().map(i => i.json);\nconst seen = new Set();\nconst baselined = new Set();\nfor (const r of $('Read prospect log').all().map(i => i.json)) {\n  if (!r.signal_key) continue;\n  seen.add(String(r.signal_key));\n  baselined.add(String(r.company));\n}\nconst rule = $('Read rules').all().map(i => i.json).find(r => r.rule_id === 'NEW_STATE_PAYROLL');\nconst today = $now.toFormat('yyyy-MM-dd');\n\nconst out = [];\n$('Get Ashby jobs').all().forEach((item, i) => { // one response per prospect, in the same order\n  const prospect = prospects[i];\n  const jobs = item.json.jobs;\n  if (!prospect || !Array.isArray(jobs)) return; // a bad board name or failed request: skip it\n  const firstJobPerState = new Map();\n  for (const job of jobs) {\n    if (job.isListed === false) continue;\n    const places = [{ address: job.address?.postalAddress, label: job.location },\n      ...(job.secondaryLocations || []).map(s => ({ address: s.address, label: s.location }))];\n    for (const p of places) {\n      const st = stateOf(p.address, p.label);\n      if (st && !firstJobPerState.has(st)) firstJobPerState.set(st, job);\n    }\n  }\n  for (const [state, job] of firstJobPerState) {\n    const signal_key = `${prospect.company}:${state}`;\n    if (seen.has(signal_key)) continue;\n    out.push({ json: {\n      signal_key, company: prospect.company, state, first_seen: today,\n      job_title: job.title, job_url: job.jobUrl,\n      // the first run for a company only records a baseline, so you aren't flooded on day one\n      status: baselined.has(prospect.company) ? 'new' : 'baseline',\n      rule_title: rule?.title, rule_requirement: rule?.requirement, source_url: rule?.source_url,\n    }});\n  }\n});\nreturn out;\n"
+      },
+      "id": "1878ab02-e000-4e77-a27f-c1a2e552471c",
+      "name": "Find new-state hiring",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "PASTE_YOUR_SHEET_URL",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "prospect_log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "signal_key": "={{ $json.signal_key }}",
+            "company": "={{ $json.company }}",
+            "state": "={{ $json.state }}",
+            "first_seen": "={{ $json.first_seen }}",
+            "job_title": "={{ $json.job_title }}",
+            "job_url": "={{ $json.job_url }}",
+            "status": "={{ $json.status }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "signal_key",
+              "displayName": "signal_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "company",
+              "displayName": "company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "state",
+              "displayName": "state",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "first_seen",
+              "displayName": "first_seen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_title",
+              "displayName": "job_title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_url",
+              "displayName": "job_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1b5cfd00-dbd3-489b-bffc-8188a3092ecb",
+      "name": "Log signals",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1320,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "14f7b1a9-f0b9-4aad-963d-dce9e3f71216",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "new",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ca07dc9a-47b9-43e3-ba75-86be9aa7dc3f",
+      "name": "Only new signals",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-haiku-5-5",
+          "mode": "id"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Write a short note from Spine to the founder of {{ $json.company }}. They've just posted a role in {{ $json.state }}: \"{{ $json.job_title }}\".\n\nUse only this background, and don't claim to know anything else about the company:\n{{ $json.rule_requirement }}\n\nThree sentences. Friendly and specific, no hype, no emoji. Offer help with payroll setup in the new state. Don't suggest they've done anything wrong, and don't say it's their first hire there."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a50c1df3-774c-435a-b62d-c06f999d188e",
+      "name": "Draft outreach note",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "text": "={{ $('Only new signals').item.json.company }} is now hiring in {{ $('Only new signals').item.json.state }}: {{ $('Only new signals').item.json.job_title }}\n{{ $('Only new signals').item.json.job_url }}\n\nDraft note for a person to edit and send:\n{{ ($json.content && $json.content[0] && $json.content[0].text) || $json.text || $json.output || '' }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "bf1285bc-cb61-47b8-926a-ac425b9ff7c7",
+      "name": "Post signal",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1760,
+        120
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read prospects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read prospects": {
+      "main": [
+        [
+          {
+            "node": "Get Ashby jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Ashby jobs": {
+      "main": [
+        [
+          {
+            "node": "Read prospect log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read prospect log": {
+      "main": [
+        [
+          {
+            "node": "Read rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read rules": {
+      "main": [
+        [
+          {
+            "node": "Find new-state hiring",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find new-state hiring": {
+      "main": [
+        [
+          {
+            "node": "Log signals",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Only new signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only new signals": {
+      "main": [
+        [
+          {
+            "node": "Draft outreach note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft outreach note": {
+      "main": [
+        [
+          {
+            "node": "Post signal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Los_Angeles"
+  }
+}

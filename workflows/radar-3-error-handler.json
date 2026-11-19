@@ -1,0 +1,56 @@
+{
+  "name": "Radar – Error handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "478ec231-734c-4815-97cf-561691f1ff68",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "text": "=Radar failure in {{ $json.workflow.name }} at \"{{ $json.execution.lastNodeExecuted }}\": {{ $json.execution.error.message }}\n{{ $json.execution.url }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "8ae89c37-b60c-4a24-ac0c-febe9a761dfd",
+      "name": "Post error",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        240,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Post error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Los_Angeles"
+  }
+}

@@ -1,0 +1,687 @@
+{
+  "name": "Radar – Review and send",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "e8a96fed-13cd-474f-bf0a-a5b2e0c96b22",
+      "name": "Alert in",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a221311e-65f6-48e2-baab-42ed141e6747",
+              "leftValue": "={{ $json.alert_key }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "5a81238e-f328-4ae5-b2d3-dc0977cb1574",
+      "name": "Has rule details?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "The alert arrived empty. To test this workflow on its own, set mock data on Alert in."
+      },
+      "id": "26fa0bf0-64b9-42f8-b8f9-494feb3c0a29",
+      "name": "Stop: empty alert",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-haiku-5-5",
+          "mode": "id"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You write short Slack messages from Spine, a benefits and compliance team, to a startup's founder.\n\nWrite a message about the requirement below.\n- Use only the facts in REQUIREMENT and FACTS. Don't add requirements, numbers, dates, penalties or deadlines.\n- Don't do date math. Describe timing the way REQUIREMENT does.\n- If anything is unclear, say Spine will confirm the details.\n- Say what changed and what's required. If OWNER is Spine, say Spine is handling it. If OWNER is Client, say what their team needs to do and that Spine can help.\n- Under 90 words, in plain English, with no emoji. Don't phrase it as legal advice.\n- End with the SOURCE link on its own line.\n\nTITLE: {{ $json.title }}\nREQUIREMENT: {{ $json.requirement }}\nFACTS: {{ JSON.stringify($json.facts) }}\nOWNER: {{ $json.owner }}\nSOURCE: {{ $json.source_url }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3f8250e6-e004-4fab-9dcd-9f6b0296c7dd",
+      "name": "Draft message",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Check the draft: a tripwire for invented facts. Code node, Mode: Run Once for All Items.\nconst alert = $('Alert in').first().json;\nconst out = $input.first().json;\n\n// The model node's output shape differs by node and version: take the first text found.\nconst draft = String(\n  out.content?.find?.(c => c.type === 'text')?.text ?? out.text ?? out.output ?? out.message?.content ?? ''\n).trim();\n\n// Every number in the draft must already appear in the rule or the facts.\nconst numbersIn = s => (String(s).match(/\\d[\\d,.]*/g) || [])\n  .map(n => n.replace(/[.,]+$/, '').replace(/,/g, ''))\n  .map(n => String(Number(n))); // \"05\" and \"5\" compare equal\nconst allowed = new Set(numbersIn(\n  [alert.title, alert.requirement, alert.source_name, alert.source_url, JSON.stringify(alert.facts)].join(' ')\n));\nconst unexpected = [...new Set(numbersIn(draft))].filter(n => !allowed.has(n));\n\nconst problems = [];\nif (!alert.requirement || !alert.source_url) problems.push('The alert arrived without its rule details, so there was nothing to draft from.');\nif (!draft) problems.push('The model returned no text.');\nif (unexpected.length) problems.push(`Numbers that aren't in the rule or facts: ${unexpected.join(', ')}.`);\nif (alert.source_url && !draft.includes(alert.source_url)) problems.push('The source link is missing.');\n\nreturn [{ json: { draft, passed: problems.length === 0, problems: problems.join(' ') } }];\n"
+      },
+      "id": "1dad38ac-33b6-4f65-b208-b50216d3bcb4",
+      "name": "Check the draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "PASTE_YOUR_SHEET_URL",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "alerts_log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "alert_key": "={{ $('Alert in').first().json.alert_key }}",
+            "rule_id": "={{ $('Alert in').first().json.rule_id }}",
+            "scope": "={{ $('Alert in').first().json.scope }}",
+            "status": "pending",
+            "detected_on": "={{ $('Alert in').first().json.detected_on }}",
+            "facts": "={{ JSON.stringify($('Alert in').first().json.facts) }}",
+            "draft": "={{ $json.draft }}",
+            "check_result": "={{ $json.passed ? 'passed' : $json.problems }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "alert_key",
+              "displayName": "alert_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "rule_id",
+              "displayName": "rule_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scope",
+              "displayName": "scope",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "detected_on",
+              "displayName": "detected_on",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "facts",
+              "displayName": "facts",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "draft",
+              "displayName": "draft",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "check_result",
+              "displayName": "check_result",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "decided_at",
+              "displayName": "decided_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "approver",
+              "displayName": "approver",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "useAppend": true
+        }
+      },
+      "id": "3e92c207-b233-4744-84f7-7820bf330861",
+      "name": "Log as pending",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "message": "=*{{ $('Alert in').first().json.title }}*  ({{ $('Alert in').first().json.alert_key }})\nFact check: {{ $('Check the draft').first().json.passed ? 'passed' : 'FAILED. ' + $('Check the draft').first().json.problems }}\nFacts: {{ JSON.stringify($('Alert in').first().json.facts) }}\n\nDraft for the client:\n{{ $('Check the draft').first().json.draft }}",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double"
+          }
+        },
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "71bf7697-6683-4680-b358-00a01beffc47",
+      "name": "Ask Spine to approve",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1100,
+        0
+      ],
+      "webhookId": "47ab23b2-6cb6-4a64-aefa-b739a8191ae4"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6297aa66-0fae-4004-a69b-00f4d7ad6406",
+              "leftValue": "={{ $json.data.approved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "53789826-46e8-4606-b080-b9b3d52b351e",
+      "name": "Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "text": "={{ $('Check the draft').first().json.draft }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "6e9b2695-17b2-457b-8f9c-b6f627c664de",
+      "name": "Post to client",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1540,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "PASTE_YOUR_SHEET_URL",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "alerts_log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "alert_key": "={{ $('Alert in').first().json.alert_key }}",
+            "status": "sent",
+            "decided_at": "={{ $now.toISO() }}",
+            "approver": "={{ $('Ask Spine to approve').first().json.data.responder ? $('Ask Spine to approve').first().json.data.responder.name : 'link button' }}"
+          },
+          "matchingColumns": [
+            "alert_key"
+          ],
+          "schema": [
+            {
+              "id": "alert_key",
+              "displayName": "alert_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "rule_id",
+              "displayName": "rule_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scope",
+              "displayName": "scope",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "detected_on",
+              "displayName": "detected_on",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "facts",
+              "displayName": "facts",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "draft",
+              "displayName": "draft",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "check_result",
+              "displayName": "check_result",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "decided_at",
+              "displayName": "decided_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "approver",
+              "displayName": "approver",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "95f49243-26f7-4719-b11b-9955c760ada1",
+      "name": "Mark sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1760,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "PASTE_YOUR_SHEET_URL",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "alerts_log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "alert_key": "={{ $('Alert in').first().json.alert_key }}",
+            "status": "not_sent",
+            "decided_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [
+            "alert_key"
+          ],
+          "schema": [
+            {
+              "id": "alert_key",
+              "displayName": "alert_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "rule_id",
+              "displayName": "rule_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scope",
+              "displayName": "scope",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "detected_on",
+              "displayName": "detected_on",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "facts",
+              "displayName": "facts",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "draft",
+              "displayName": "draft",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "check_result",
+              "displayName": "check_result",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "decided_at",
+              "displayName": "decided_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "approver",
+              "displayName": "approver",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "59306335-cb9d-432a-b227-0d69f75fccff",
+      "name": "Mark not sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1540,
+        120
+      ]
+    }
+  ],
+  "connections": {
+    "Draft message": {
+      "main": [
+        [
+          {
+            "node": "Check the draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check the draft": {
+      "main": [
+        [
+          {
+            "node": "Log as pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log as pending": {
+      "main": [
+        [
+          {
+            "node": "Ask Spine to approve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Spine to approve": {
+      "main": [
+        [
+          {
+            "node": "Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert in": {
+      "main": [
+        [
+          {
+            "node": "Has rule details?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has rule details?": {
+      "main": [
+        [
+          {
+            "node": "Draft message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Stop: empty alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved?": {
+      "main": [
+        [
+          {
+            "node": "Post to client",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark not sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to client": {
+      "main": [
+        [
+          {
+            "node": "Mark sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Los_Angeles"
+  }
+}

@@ -1,0 +1,233 @@
+{
+  "name": "Radar – Daily check",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "3b31b96f-cea7-4014-a007-08185343328e",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "PASTE_YOUR_SHEET_URL",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "employees",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "b0d81630-0c24-493f-a355-06a9b528bb98",
+      "name": "Read employees",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "PASTE_YOUR_SHEET_URL",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "rules",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "3ba9d1af-0fa8-469e-a515-834a7edbe328",
+      "name": "Read rules",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        440,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "PASTE_YOUR_SHEET_URL",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "registered_states",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "229b1bf4-3ba7-475a-a19a-98f5e617a58e",
+      "name": "Read registered states",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        660,
+        0
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "PASTE_YOUR_SHEET_URL",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "alerts_log",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "16dc5ed6-d71c-4f5d-83d9-0888eb6fe3b3",
+      "name": "Read alerts log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        0
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Evaluate rules: decides which rules newly apply. Counting only, no AI.\n// Code node, Mode: Run Once for All Items. Node names below must match your canvas.\n\nconst CONFIG = {\n  FULL_TIME_HOURS: 40, // the employer's own full-time definition (COBRA counts part-timers as a fraction of it)\n  LOOKAHEAD_DAYS: 45,  // flag a new-state hire this many days before their start date\n};\n\n// ---------- read the sheets ----------\nconst rows = name => $(name).all().map(i => i.json).filter(r => Object.keys(r).length > 0);\nconst employees = rows('Read employees');\nconst rules = rows('Read rules').filter(r => String(r.active).toUpperCase() === 'TRUE');\nconst registered = new Set(rows('Read registered states').map(r => String(r.state).trim().toUpperCase()));\nconst alreadyLogged = new Set(rows('Read alerts log').map(r => String(r.alert_key).trim()));\n\n// ---------- dates (date-only, in UTC so time zones can't shift a day) ----------\nconst DAY = 86400000;\nfunction parseDate(v) {\n  if (v === null || v === undefined || v === '') return null;\n  if (typeof v === 'number') return new Date(Date.UTC(1899, 11, 30) + v * DAY); // Sheets serial number\n  const s = String(v).trim();\n  let m = s.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})/);\n  if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));\n  m = s.match(/^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/); // a reformatted US-style cell\n  if (m) return new Date(Date.UTC(+m[3], +m[1] - 1, +m[2]));\n  throw new Error(`Can't read the date \"${s}\". Use YYYY-MM-DD.`);\n}\nconst iso = d => d.toISOString().slice(0, 10);\nconst addDays = (d, n) => new Date(d.getTime() + n * DAY);\nconst todayText = $now.toFormat('yyyy-MM-dd'); // $now follows the workflow's time zone\nconst today = parseDate(todayText);\nconst thisYear = today.getUTCFullYear();\n\nconst people = employees.map(e => ({\n  state: String(e.work_state || '').trim().toUpperCase(),\n  isContractor: String(e.type || '').trim().toLowerCase() === 'contractor',\n  start: parseDate(e.start_date),\n  end: parseDate(e.end_date),\n  hours: Number(e.weekly_hours) || 0,\n}));\nconst activeOn = (p, d) => p.start && p.start <= d && (!p.end || p.end >= d);\nconst startsSoon = p => p.start && p.start > today && p.start <= addDays(today, CONFIG.LOOKAHEAD_DAYS);\n\n// ---------- counting helpers ----------\nfunction businessDays(year, upTo) { // weekdays stand in for \"typical business days\"\n  const last = upTo && upTo.getUTCFullYear() === year ? upTo : new Date(Date.UTC(year, 11, 31));\n  const days = [];\n  for (let d = new Date(Date.UTC(year, 0, 1)); d <= last; d = addDays(d, 1)) {\n    const w = d.getUTCDay();\n    if (w !== 0 && w !== 6) days.push(d);\n  }\n  return days;\n}\nfunction cobraCount(d) { // full-time counts as 1, part-time as hours / full-time hours\n  return people.filter(p => !p.isContractor && activeOn(p, d))\n    .reduce((sum, p) => sum + Math.min(1, p.hours / CONFIG.FULL_TIME_HOURS), 0);\n}\nconst daysAtOrAbove = (year, threshold, upTo) =>\n  businessDays(year, upTo).filter(d => cobraCount(d) >= threshold).length;\n\nfunction aleMonth(year, month) { // IRS: full-time (130+ hours) + part-time hours / 120, max 120 each\n  const first = new Date(Date.UTC(year, month, 1));\n  const last = new Date(Date.UTC(year, month + 1, 0));\n  let fullTime = 0, partTimeHours = 0;\n  for (const p of people) {\n    if (p.isContractor) continue;\n    let activeDays = 0;\n    for (let d = first; d <= last; d = addDays(d, 1)) if (activeOn(p, d)) activeDays++;\n    if (!activeDays) continue;\n    const hours = (p.hours * 52 / 12) * (activeDays / last.getUTCDate());\n    if (hours >= 130) fullTime++;\n    else partTimeHours += Math.min(hours, 120);\n  }\n  return fullTime + partTimeHours / 120;\n}\nfunction aleAverage(year, months) {\n  let total = 0;\n  for (let m = 0; m < months; m++) total += aleMonth(year, m);\n  return Math.floor(total / months); // the IRS rounds a fractional average down\n}\nconst headcount = withContractors =>\n  people.filter(p => activeOn(p, today) && (withContractors || !p.isContractor)).length;\nconst employeesIn = st =>\n  people.filter(p => !p.isContractor && p.state === st && (activeOn(p, today) || startsSoon(p)));\nconst earliestStart = list => iso(list.map(p => p.start).sort((a, b) => a - b)[0]);\n\n// ---------- evaluate each rule ----------\nconst alerts = [];\nfunction fire(rule, scope, facts) {\n  const alert_key = `${rule.rule_id}:${scope}`;\n  if (alreadyLogged.has(alert_key)) return; // already flagged once: stay quiet\n  alerts.push({ json: {\n    alert_key, rule_id: rule.rule_id, scope, detected_on: todayText,\n    title: rule.title, requirement: rule.requirement, owner: rule.owner,\n    source_name: rule.source_name, source_url: rule.source_url, facts,\n  }});\n}\n\nfor (const rule of rules) {\n  const threshold = Number(rule.threshold) || 0;\n  const st = String(rule.state || '').trim().toUpperCase();\n  const withContractors = String(rule.count_contractors).toUpperCase() === 'TRUE';\n  const inRuleState = !st || people.some(p => p.state === st && activeOn(p, today) && (withContractors || !p.isContractor));\n\n  switch (rule.check) {\n    case 'new_state': { // a state with employees (or a hire starting soon) where payroll isn't registered\n      const states = new Set(people.filter(p => !p.isContractor && (activeOn(p, today) || startsSoon(p))).map(p => p.state));\n      for (const s of states) {\n        if (registered.has(s) || (st && s !== st)) continue;\n        const there = employeesIn(s);\n        fire(rule, s, { state: s, employees_in_state: there.length, first_start_date: earliestStart(there) });\n      }\n      break;\n    }\n    case 'state_has_employees': {\n      const there = employeesIn(st);\n      if (there.length >= threshold)\n        fire(rule, st, { state: st, employees_in_state: there.length, first_start_date: earliestStart(there) });\n      break;\n    }\n    case 'headcount_gte': {\n      const n = headcount(withContractors);\n      if (n >= threshold && inRuleState)\n        fire(rule, 'ALL', { headcount: n, counts_contractors: withContractors, threshold });\n      break;\n    }\n    case 'upcoming_deadline': {\n      const deadline = parseDate(rule.deadline_date);\n      const daysLeft = Math.round((deadline - today) / DAY);\n      const n = headcount(withContractors);\n      if (n >= threshold && inRuleState && daysLeft >= 0 && daysLeft <= Number(rule.lead_days))\n        fire(rule, iso(deadline), { deadline: iso(deadline), days_left: daysLeft, headcount: n });\n      break;\n    }\n    case 'cobra_prior_year': {\n      const y = thisYear - 1, total = businessDays(y).length, hit = daysAtOrAbove(y, threshold);\n      if (hit > total / 2)\n        fire(rule, String(thisYear), { counted_year: y, days_at_or_above: hit, business_days_in_year: total, threshold });\n      break;\n    }\n    case 'cobra_current_year': { // already past half of this year's business days, so next year is locked in\n      const total = businessDays(thisYear).length, hit = daysAtOrAbove(thisYear, threshold, today);\n      if (hit > total / 2)\n        fire(rule, String(thisYear + 1), { counted_year: thisYear, days_at_or_above_so_far: hit, business_days_in_year: total, threshold, applies_in_year: thisYear + 1 });\n      break;\n    }\n    case 'ale_prior_year': {\n      const avg = aleAverage(thisYear - 1, 12);\n      if (avg >= threshold)\n        fire(rule, String(thisYear), { counted_year: thisYear - 1, average_full_time_equivalents: avg, threshold });\n      break;\n    }\n    case 'ale_current_ytd': {\n      const months = today.getUTCMonth(); // completed months so far this year\n      if (!months) break;\n      const avg = aleAverage(thisYear, months);\n      if (avg >= threshold)\n        fire(rule, String(thisYear + 1), { counted_year: thisYear, months_counted: months, average_so_far: avg, threshold });\n      break;\n    }\n    default:\n      throw new Error(`Rule ${rule.rule_id} has an unknown check: \"${rule.check}\"`);\n  }\n}\n\nreturn alerts;\n"
+      },
+      "id": "bfd5a4ba-caac-4752-bea6-d033482ffd1a",
+      "name": "Evaluate rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "bf0fda4d-6ec4-44be-b4e0-4f9fb27089c0",
+      "name": "Send each alert for review",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1320,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read employees",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read employees": {
+      "main": [
+        [
+          {
+            "node": "Read rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read rules": {
+      "main": [
+        [
+          {
+            "node": "Read registered states",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read registered states": {
+      "main": [
+        [
+          {
+            "node": "Read alerts log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read alerts log": {
+      "main": [
+        [
+          {
+            "node": "Evaluate rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate rules": {
+      "main": [
+        [
+          {
+            "node": "Send each alert for review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Los_Angeles"
+  }
+}
