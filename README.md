@@ -31,10 +31,17 @@ I built it as a portfolio project for Spine's AI & Operations Associate role, wi
 
 ![The alert log in Google Sheets](screenshots/alerts-log.png)
 
-<!-- Add more screenshots here, for example:
+**The approval.** Each draft arrives in a private review channel with its fact-check result and the facts behind it. Nothing moves until someone clicks Approve or Decline.
+
 ![The approval request in Slack](screenshots/slack-approval.png)
-![The approved message in the client channel](screenshots/client-message.png)
--->
+
+**The client's view.** Once it's approved, the message posts to the client's channel with its source link.
+
+![The approved message in the client's channel](screenshots/client-message.png)
+
+**Behind that message.** This is the run of Workflow 2 that produced it, with every step from the guard to Mark sent completed.
+
+![Workflow 2's run in n8n](screenshots/review-run.png)
 
 ## Design choices
 

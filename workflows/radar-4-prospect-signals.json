@@ -11,7 +11,7 @@
           ]
         }
       },
-      "id": "bf630ffb-3c53-461c-84c3-6c8c67564b08",
+      "id": "a909cb89-8a10-4ee7-b30e-600bf9adba0b",
       "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
@@ -35,7 +35,7 @@
         },
         "options": {}
       },
-      "id": "7c940bca-adf2-4dce-85fa-f73126f5e0b3",
+      "id": "1e9d83cc-3569-4d5c-a992-18cf174740dd",
       "name": "Read prospects",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
@@ -49,7 +49,7 @@
         "url": "=https://api.ashbyhq.com/posting-api/job-board/{{ $json.ashby_board }}",
         "options": {}
       },
-      "id": "30ff48e8-3ae4-4860-b247-6440694ee896",
+      "id": "c4481009-43d4-40b3-beb9-aa4f3fcf2339",
       "name": "Get Ashby jobs",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -74,7 +74,7 @@
         },
         "options": {}
       },
-      "id": "c0a920e0-2ce5-4d46-a6d9-3ddf7a66c0ca",
+      "id": "b135081f-3808-4f41-9904-c81592f0dd92",
       "name": "Read prospect log",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
@@ -100,7 +100,7 @@
         },
         "options": {}
       },
-      "id": "235e97d0-fc87-415b-a462-4e880f235bf3",
+      "id": "64c0cd1a-75b7-4f71-bf69-688702d4d6f8",
       "name": "Read rules",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
@@ -115,7 +115,7 @@
         "mode": "runOnceForAllItems",
         "jsCode": "// Find new-state hiring from public Ashby job boards. Code node, Mode: Run Once for All Items.\nconst STATES = { alabama:'AL', alaska:'AK', arizona:'AZ', arkansas:'AR', california:'CA', colorado:'CO',\n  connecticut:'CT', delaware:'DE', 'district of columbia':'DC', florida:'FL', georgia:'GA', hawaii:'HI',\n  idaho:'ID', illinois:'IL', indiana:'IN', iowa:'IA', kansas:'KS', kentucky:'KY', louisiana:'LA', maine:'ME',\n  maryland:'MD', massachusetts:'MA', michigan:'MI', minnesota:'MN', mississippi:'MS', missouri:'MO',\n  montana:'MT', nebraska:'NE', nevada:'NV', 'new hampshire':'NH', 'new jersey':'NJ', 'new mexico':'NM',\n  'new york':'NY', 'north carolina':'NC', 'north dakota':'ND', ohio:'OH', oklahoma:'OK', oregon:'OR',\n  pennsylvania:'PA', 'rhode island':'RI', 'south carolina':'SC', 'south dakota':'SD', tennessee:'TN',\n  texas:'TX', utah:'UT', vermont:'VT', virginia:'VA', washington:'WA', 'west virginia':'WV',\n  wisconsin:'WI', wyoming:'WY' };\nconst CODES = new Set(Object.values(STATES));\nconst US = new Set(['', 'us', 'usa', 'united states', 'united states of america']);\n\nfunction stateOf(address, label) {\n  const region = String(address?.addressRegion || '').trim();\n  const country = String(address?.addressCountry || '').trim().toLowerCase();\n  if (region && US.has(country)) {\n    if (CODES.has(region.toUpperCase())) return region.toUpperCase();\n    if (STATES[region.toLowerCase()]) return STATES[region.toLowerCase()];\n  }\n  const m = String(label || '').match(/,\\s*([A-Z]{2})\\b/); // \"Austin, TX\"\n  if (m && CODES.has(m[1])) return m[1];\n  return null; // remote, non-US, or unparseable\n}\n\nconst prospects = $('Read prospects').all().map(i => i.json);\nconst seen = new Set();\nconst baselined = new Set();\nfor (const r of $('Read prospect log').all().map(i => i.json)) {\n  if (!r.signal_key) continue;\n  seen.add(String(r.signal_key));\n  baselined.add(String(r.company));\n}\nconst rule = $('Read rules').all().map(i => i.json).find(r => r.rule_id === 'NEW_STATE_PAYROLL');\nconst today = $now.toFormat('yyyy-MM-dd');\n\nconst out = [];\n$('Get Ashby jobs').all().forEach((item, i) => { // one response per prospect, in the same order\n  const prospect = prospects[i];\n  const jobs = item.json.jobs;\n  if (!prospect || !Array.isArray(jobs)) return; // a bad board name or failed request: skip it\n  const firstJobPerState = new Map();\n  for (const job of jobs) {\n    if (job.isListed === false) continue;\n    const places = [{ address: job.address?.postalAddress, label: job.location },\n      ...(job.secondaryLocations || []).map(s => ({ address: s.address, label: s.location }))];\n    for (const p of places) {\n      const st = stateOf(p.address, p.label);\n      if (st && !firstJobPerState.has(st)) firstJobPerState.set(st, job);\n    }\n  }\n  for (const [state, job] of firstJobPerState) {\n    const signal_key = `${prospect.company}:${state}`;\n    if (seen.has(signal_key)) continue;\n    out.push({ json: {\n      signal_key, company: prospect.company, state, first_seen: today,\n      job_title: job.title, job_url: job.jobUrl,\n      // the first run for a company only records a baseline, so you aren't flooded on day one\n      status: baselined.has(prospect.company) ? 'new' : 'baseline',\n      rule_title: rule?.title, rule_requirement: rule?.requirement, source_url: rule?.source_url,\n    }});\n  }\n});\nreturn out;\n"
       },
-      "id": "1878ab02-e000-4e77-a27f-c1a2e552471c",
+      "id": "9e1ec17c-5e3b-4daf-bc9c-a7654613e8d8",
       "name": "Find new-state hiring",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -217,7 +217,7 @@
         },
         "options": {}
       },
-      "id": "1b5cfd00-dbd3-489b-bffc-8188a3092ecb",
+      "id": "ea300652-19a3-4321-8340-8db58a4998c7",
       "name": "Log signals",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
@@ -237,7 +237,7 @@
           },
           "conditions": [
             {
-              "id": "14f7b1a9-f0b9-4aad-963d-dce9e3f71216",
+              "id": "05d07e4e-8871-475a-82f0-9f1ad6f8ecb7",
               "leftValue": "={{ $json.status }}",
               "rightValue": "new",
               "operator": {
@@ -250,7 +250,7 @@
         },
         "options": {}
       },
-      "id": "ca07dc9a-47b9-43e3-ba75-86be9aa7dc3f",
+      "id": "aed3edb3-bbbd-4ebb-99f9-24b978f6bb81",
       "name": "Only new signals",
       "type": "n8n-nodes-base.filter",
       "typeVersion": 2.2,
@@ -275,7 +275,7 @@
         },
         "options": {}
       },
-      "id": "a50c1df3-774c-435a-b62d-c06f999d188e",
+      "id": "42a059cb-e060-4229-8b24-94e2c72b1e7a",
       "name": "Draft outreach note",
       "type": "@n8n/n8n-nodes-langchain.anthropic",
       "typeVersion": 1,
@@ -297,12 +297,12 @@
           "includeLinkToWorkflow": false
         }
       },
-      "id": "bf1285bc-cb61-47b8-926a-ac425b9ff7c7",
+      "id": "bec83af6-150f-43b2-9779-01363b42d959",
       "name": "Post signal",
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.3,
       "position": [
-        1760,
+        1880,
         120
       ]
     }
